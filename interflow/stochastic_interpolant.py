@@ -44,7 +44,7 @@ def compute_div(
 
 
 
-class DiffusiveInterpolant(torch.nn.Module):
+class Interpolant(torch.nn.Module):
     def __init__(
         self, 
         path: str,  
@@ -54,7 +54,7 @@ class DiffusiveInterpolant(torch.nn.Module):
         It: Callable[[Sample, Sample], Sample], 
         dtIt: Callable[[Sample, Sample], Sample]
     ) -> None:
-        super(DiffusiveInterpolant, self).__init__()
+        super(Interpolant, self).__init__()
         self.path = path
         self.gamma = gamma
         self.gamma_dot = gamma_dot
@@ -106,7 +106,7 @@ class DiffusiveInterpolant(torch.nn.Module):
 
 
 class PFlowRHS(torch.nn.Module):
-    def __init__(self, v: Velocity, s: Score, interpolant: DiffusiveInterpolant, sample_only=False):
+    def __init__(self, v: Velocity, s: Score, interpolant: Interpolant, sample_only=False):
         super(PFlowRHS, self).__init__()
         self.v = v
         self.s = s
@@ -139,7 +139,7 @@ class PFlowIntegrator:
     v: Velocity
     s: Score
     method: str
-    interpolant: DiffusiveInterpolant
+    interpolant: Interpolant
     n_step: int
     atol: torch.tensor = 5e-4
     rtol: torch.tensor = 5e-4
@@ -174,7 +174,7 @@ class SDEIntegrator:
     s: Score
     dt: float
     eps: torch.tensor
-    interpolant: DiffusiveInterpolant
+    interpolant: Interpolant
     n_save: int
     n_likelihood: int = 1
 
@@ -334,7 +334,7 @@ def loss_per_sample_sv(
     x0: Sample,
     x1: Sample,
     t: torch.tensor,
-    interpolant: DiffusiveInterpolant,
+    interpolant: Interpolant,
     loss_fac: float
 ) -> torch.tensor:
     """Compute the (variance-reduced) loss on an individual sample via antithetic sampling."""
@@ -366,7 +366,7 @@ def loss_sv(
     x0s: torch.tensor,
     x1s: torch.tensor, 
     ts: torch.tensor, 
-    interpolant: DiffusiveInterpolant,
+    interpolant: Interpolant,
     loss_fac: torch.tensor
 ) -> Tuple[torch.tensor, Tuple[torch.tensor, torch.tensor]]:
 
