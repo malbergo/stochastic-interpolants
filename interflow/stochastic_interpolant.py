@@ -5,6 +5,7 @@ from typing import Callable, Any, Tuple
 from torchdiffeq import odeint_adjoint as odeint
 from functorch import jacfwd, vmap
 import math
+from . import fabrics
 
 
 Time     = torch.tensor
@@ -45,48 +46,35 @@ def compute_div(
 
 
 class Interpolant(torch.nn.Module):
+    """
+    Class for all things interpoalnt $x_t = I_t(x_0, x_1) + \gamma(t)z.
+    
+    path: str,    what type of interpolant to use, e.g. 'linear' for linear interpolant. see fabrics for options
+    gamma_type:   what type of gamma function to use, e.g. 'brownian' for $\gamma(t) = \sqrt{t(1-t)}
+    """
     def __init__(
         self, 
-        path: str,  
-        gamma: Callable[[Time], torch.tensor],
-        gamma_dot: Callable[[Time], torch.tensor],
-        gg_dot: Callable[[Time], torch.tensor],
-        It: Callable[[Sample, Sample], Sample], 
-        dtIt: Callable[[Sample, Sample], Sample]
+        path: str,
+        gamma_type: str,
+        gamma: Callable[[Time], torch.tensor]          = None,
+        gamma_dot: Callable[[Time], torch.tensor]      = None,
+        gg_dot: Callable[[Time], torch.tensor]         = None,
+        It: Callable[[Time, Sample, Sample], Sample]   = None, 
+        dtIt: Callable[[Time, Sample, Sample], Sample] = None
     ) -> None:
         super(Interpolant, self).__init__()
-        self.path = path
-        self.gamma = gamma
-        self.gamma_dot = gamma_dot
-        self.gg_dot = gg_dot
-
-        if self.path == 'linear':
-            self.It   = lambda t, x0, x1: (1 - t)*x0 + t*x1
-            self.dtIt = lambda _, x0, x1: x1 - x0
-
-        elif self.path == 'new-trig':
-            self.It = lambda t, x0, x1: (torch.sqrt(1 - self.gamma(t)**2))*torch.cos((1/2) * math.pi * t)*x0 + (torch.sqrt(1 - self.gamma(t)**2))*torch.sin((1/2)* math.pi * t)
-            self.dtIt = lambda t, x0, x1: -(torch.sin( (math.pi/2) * t ) * (2*x1*self.gg_dot(t) - math.pi * x0 * self.gamma(t)**2 + math.pi*x0   ) + 
-                                            torch.cos( (math.pi/2) * t ) * (2*x0*self.gg_dot(t) + math.pi * x1 * self.gamma(t)**2 - math.pi*x1   ) ) / (2*torch.sqrt(1 - self.gamma(t)**2))
-
-            # self.dtIt = lambda t, x0, x1: (  ((  (math.pi * (self.gamma(t)**2 - 1)*torch.sin(math.pi /2 * t)) - 
-            #                                 2*self.gg_dot(t)*torch.cos(math.pi/2 * t) ) / (2 * torch.sqrt(1 - self.gamma(t)**2)) ) * x0  - 
-            #                                ( ( math.pi * (self.gamma(t)**2 - 1)*torch.cos(math.pi/2 * t) + 2*self.gg_dot(t)*torch.sin(math.pi/2 * t) ) / (2 * torch.sqrt(1 - self.gamma(t)**2)) )*x1
-            #                               )
-        elif self.path == 'new-trig-v2':
-            self.a    = lambda t: torch.sqrt(1 - self.gamma(t)**2)*torch.cos(0.5*math.pi*t)
-            self.b    = lambda t: torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*math.pi*t)
-            self.adot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - self.gamma(t)**2)*torch.cos(0.5*math.pi*t) \
-                                    - 0.5*math.pi*torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*math.pi*t)
-            self.bdot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*math.pi*t) \
-                                    + 0.5*math.pi*torch.sqrt(1 - self.gamma(t)**2)*torch.cos(0.5*math.pi*t)
-
-            self.It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
-            self.dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
-        else:
+        
+        
+        self.gamma, self.gamma_dot, self.gg_dot = fabrics.make_gamma(gamma_type=gamma_type)
+        if path == 'custom':
             print('Assuming interpolant was passed in directly...')
+            self.It = It
+            self.dtIt = dtIt
             assert self.It != None
             assert self.dtIt != None
+        else:
+            self.It, self.dtIt = fabrics.make_It(path, self.gamma)
+        
 
     def calc_xt(self, t: Time, x0: Sample, x1: Sample):
         z = torch.randn(x0.shape).to(t)
