@@ -5,20 +5,18 @@
 
 <img src="http://malbergo.me/docs/papers/ode_v_sde.png"  width="675" height="200">
 
-This repo provides a very simple implementation of the stochastic interpolant method of [Building Normalizing Flows with Stochastic Interpolants](https://arxiv.org/abs/2209.15571) and [Stochastic Interpolants: A Unifying Framework for Flows and Diffusions](https://arxiv.org/abs/2303.08797).
+This repository provides a very simple implementation of the stochastic interpolant method of [Building Normalizing Flows with Stochastic Interpolants](https://arxiv.org/abs/2209.15571) and [Stochastic Interpolants: A Unifying Framework for Flows and Diffusions](https://arxiv.org/abs/2303.08797).
 
-The intent of this repo is to provide the reader with an interactive tool to understand the mechanisms of the framework, as well as to reproduce any simple figures in [2].
+The intent of this repository is to provide the reader with an interactive tool to understand the mechanisms of the framework, as well as to reproduce any figures in [2].
 
-A demonstration script of defining an interpolant $x_t = I_t(x_0, x_1) + \gamma(t) z$ and learning the associated velocity fields $v_t(x)$ and $s_t(x)$ (for the score function) is given in the notebooks folder in 'checker.ipynb'. 
+A demonstration notebook for defining an interpolant $x_t = I(t, x_0, x_1) + \gamma(t) z$ 
+and learning the associated velocity fields $v(x, t)$ and $s(x, t)$ (for the score function) 
+can be found in `notebooks/checker.ipynb`. 
 
+An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
+case of Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
 
-ODE and SDE intregrators, as well as the class for the interpolant, are provided in `interflow/stochastic_interpolant.py`
-
-
-
-
-
-
+ODE and SDE integrators, as well an interpolant class, are provided in `interflow/stochastic_interpolant.py`
 
 
 
