@@ -14,15 +14,6 @@ Velocity = torch.nn.Module
 Score    = torch.nn.Module
 
 
-# def net_inp(
-#     t: torch.tensor,  # [1]
-#     x: torch.tensor   # [batch x dim]
-# ) -> torch.tensor:    # [batch x (1 + dim)]
-#     """Concatenate time over the batch dimension."""
-#     inp = torch.cat((t.repeat(x.shape[0]).unsqueeze(1), x), dim = 1)
-#     return inp
-
-
 def compute_div(
     f: Callable[[Time, Sample], torch.tensor],
     x: torch.tensor,
@@ -286,7 +277,7 @@ class SDEIntegrator:
     def rollout_forward(
         self, 
         init: Sample, # [batch x dim]
-        method: str = 'euler'
+        method: str = 'heun'
     ) -> torch.tensor:
         """Solve the forward-time SDE to generate a batch of samples."""
         n_step     = int(torch.ceil(1.0/self.dt))

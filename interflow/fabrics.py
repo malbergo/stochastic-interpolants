@@ -31,6 +31,7 @@ class InputWrapper(torch.nn.Module):
         tx = self.net_inp(t,x)
         return self.v(tx)
 
+
 def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config):
     sizes = [in_size] + hidden_sizes + [out_size]
     net = []
@@ -48,18 +49,13 @@ def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config)
     return InputWrapper(net)
 
 
-
-
 def make_It(path='linear', gamma = None):
-    
-    """
-    gamma function must be specified if using the trigonometric interpolant
-    """
-    
+    """gamma function must be specified if using the trigonometric interpolant"""
     if path == 'linear':
         It   = lambda t, x0, x1: (1 - t)*x0 + t*x1
         dtIt = lambda _, x0, x1: x1 - x0
-    elif path == 'trigonometric':
+        
+    elif path == 'trig':
         if gamma == None:
             raise TypeError("Gamma function must be provided for trigonometric interpolant!")
         a    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
@@ -71,16 +67,16 @@ def make_It(path='linear', gamma = None):
 
         It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
         dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
-    elif path == 'encoding-decoding':
         
+    elif path == 'encoding-decoding':
         def I_fn(t, x0, x1):
                 if t <= torch.tensor(1/2):
                     return (torch.cos(  math.pi * t)**2)*x0
                 elif t >= torch.tensor(1/2):
                     return (torch.cos(  math.pi * t)**2)*x1
-                
+
         It  = I_fn
-            
+
         def dtI_fn(t,x0,x1):
             if t < torch.tensor(1/2):
                 return -(1/2)* torch.sin(  math.pi * t) * torch.cos(  math.pi * t)*x0
@@ -88,18 +84,18 @@ def make_It(path='linear', gamma = None):
                 return -(1/2)* torch.sin(  math.pi * t) * torch.cos( math.pi * t)*x1
 
         dtIt = dtI_fn
-    
+
     elif path == 'one-sided':
         It   = lambda t, x0, x1: (1-t)*x0 + torch.sqrt(t)*torch.randn(x0.shape)
         dtIt = lambda t, x0, x1: -x0 + 1/(2*torch.sqrt(t))*torch.randn(x0.shape)
-    
+
     elif path == 'custom':
         return None, None
-        
+
     else:
         raise NotImplementedError("The interpolant you specified is not implemented.")
-        
-    
+
+
     return It, dtIt
 
 
@@ -109,13 +105,15 @@ def make_gamma(gamma_type = 'brownian'):
     and gamma(t)*gamma_dot(t) to avoid numerical divide by 0s,
     e.g. if one is using the brownian (default) gamma.
     """
-    
     if gamma_type == 'brownian':
         gamma = lambda t: torch.sqrt(t*(1-t))
         gamma_dot = lambda t: (1/(2*torch.sqrt(t*(1-t)))) * (1 -2*t)
         gg_dot = lambda t: (1/2)*(1-2*t)
+        
+    elif gamma_type == 'zero':
+        gamma = gamma_dot = gg_dot = lambda t: torch.zeros_like(t)
 
-    elif gamme_type == 'bsquared':
+    elif gamma_type == 'bsquared':
         gamma = lambda t: t*(1-t)
         gamma_dot = lambda t: 1 -2*t
         gg_dot = lambda t: gamma(t)*gamma_dot(t)
@@ -135,9 +133,6 @@ def make_gamma(gamma_type = 'brownian'):
         raise NotImplementedError("The gamma you specified is not implemented.")
         
     return gamma, gamma_dot, gg_dot
-
-
-
 
 
 def make_activation(act):
@@ -167,8 +162,6 @@ def make_activation(act):
     else:
         raise NotImplementedError(f'Unknown activation function {act}')
 
-        
-                
 
 def make_optimizer(model, opt_type, opt_cfg, model_prefix):
     opt = getattr(torch.optim, opt_type)(model.parameters(), **opt_cfg)
@@ -196,7 +189,6 @@ def maybe_load_optimizer(optimizer, *, model_prefix, opt_cfg):
         print("WARNING: Could not load optimizer state", e)
 
 
-
 def make_scheduler(*, optimizer, sched_type, **sched_config):
     if sched_type == 'Adal':
         return getattr(scheduler, sched_type)(optimizer, **sched_config)
@@ -210,11 +202,6 @@ def make_scheduler(*, optimizer, sched_type, **sched_config):
         return Mixing(optimizer=optimizer, **sched_config)
 
     
-# def make_scheduler(*, optimizer, sched_type, **sched_config):
-#     if sched_type=='StepLR':
-#         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = sched_config['step_size'], gamma = sched_config['gamma'])
-#     return scheduler
-
 def load_model(model, *, model_prefix, device, _run=None):
     assert model_prefix is not None
     return maybe_load_model(model, model_prefix=model_prefix, device=device, _run=_run)
