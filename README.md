@@ -14,9 +14,9 @@ and learning the associated velocity fields $v(x, t)$ and $s(x, t)$ (the score f
 can be found in `notebooks/checker.ipynb`. 
 
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
-case of Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
+case where $\rho_0$ and $\rho_1$ are both Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
 
-ODE and SDE integrators, as well an interpolant class, are provided in `interflow/stochastic_interpolant.py`
+ODE and SDE integrators (ODE based on ``torchdiffeq'', SDE hand-written), as well an interpolant class, are provided in `interflow/stochastic_interpolant.py`
 
 
 
