@@ -4,6 +4,7 @@ from . import util
 import math
 import hashlib
 import os
+from typing import Callable
 
 
 
@@ -14,7 +15,7 @@ class InputWrapper(torch.nn.Module):
     rather than stacking x [ndim] and t [1] to a [ndim + 1] shaped single
     input.
     """
-    def __init__(self, v):
+    def __init__(self, v: torch.nn.Module):
         super(InputWrapper, self).__init__()
         self.v = v
         
@@ -32,7 +33,15 @@ class InputWrapper(torch.nn.Module):
         return self.v(tx)
 
 
-def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config):
+def make_fc_net(
+    hidden_sizes: int, 
+    in_size: int, 
+    out_size: int, 
+    inner_act: str, 
+    final_act: str, 
+    **config
+):
+    """Construct a fully-connected network."""
     sizes = [in_size] + hidden_sizes + [out_size]
     net = []
     for i in range(len(sizes) - 1):
@@ -49,7 +58,10 @@ def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config)
     return InputWrapper(net)
 
 
-def make_It(path='linear', gamma = None):
+def make_It(
+    path: str = 'linear', 
+    gamma: Callable = None
+):
     """gamma function must be specified if using the trigonometric interpolant"""
     if path == 'linear':
         It   = lambda t, x0, x1: (1 - t)*x0 + t*x1
@@ -99,7 +111,9 @@ def make_It(path='linear', gamma = None):
     return It, dtIt
 
 
-def make_gamma(gamma_type = 'brownian'):
+def make_gamma(
+    gamma_type: str = 'brownian'
+):
     """
     returns callable functions for gamma, gamma_dot,
     and gamma(t)*gamma_dot(t) to avoid numerical divide by 0s,
@@ -135,7 +149,9 @@ def make_gamma(gamma_type = 'brownian'):
     return gamma, gamma_dot, gg_dot
 
 
-def make_activation(act):
+def make_activation(
+    act: str
+):
     if act == 'elu':
         return torch.nn.ELU()
     if act == 'leaky_relu':
