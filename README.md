@@ -10,7 +10,7 @@ This repository provides a very simple implementation of the stochastic interpol
 The intent of this repository is to provide the reader with an interactive tool to understand the mechanisms of the framework, as well as to reproduce any figures in [2].
 
 A demonstration notebook for defining an interpolant $x_t = I(t, x_0, x_1) + \gamma(t) z$ 
-and learning the associated velocity fields $v(x, t)$ and $s(x, t)$ (for the score function) 
+and learning the associated velocity fields $v(x, t)$ and $s(x, t)$ (the score function) 
 can be found in `notebooks/checker.ipynb`. 
 
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
