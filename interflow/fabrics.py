@@ -28,8 +28,20 @@ class InputWrapper(torch.nn.Module):
         inp = torch.cat((t.repeat(x.shape[0]).unsqueeze(1), x), dim = 1)
         return inp
     
+    def already_batched(self,
+                        t: torch.tensor,  # [batch x 1]
+                        x: torch.tensor,  # [batch x dim]
+                       ) -> torch.tensor: # [batch x (1 + dim)]
+        inp = torch.column_stack((t, x))
+        return inp
+    
     def forward(self, x, t):
-        tx = self.net_inp(t,x)
+        if len(t.shape) == 0:
+            tx = self.net_inp(t,x)
+        elif t.shape[0] > 1 and x.shape[0] > 1:
+            tx = self.already_batched(t,x)
+        else:
+            tx = self.net_inp(t,x)
         return self.v(tx)
 
 
