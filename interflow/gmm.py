@@ -29,6 +29,7 @@ class GMMInterpolant:
     path: str
     gamma_type: str
     device: torch.cuda.device
+    use_preconditioner: bool = False
 
 
     def __post_init__(self):
@@ -83,8 +84,14 @@ class GMMInterpolant:
         
         
         # batch s and v for input to integrators
-        self.v = vmap(self.calc_v)
-        self.s = vmap(self.calc_s)
+        if self.use_preconditioner:
+            # divide through by common, large factors in high-d
+            # factor out most likely mode in the mixture
+            self.v = lambda txs: self.batch_velocity(txs, compute_score=False)
+            self.s = lambda txs: self.batch_velocity(txs, compute_score=True)
+        else:
+            self.v = vmap(self.calc_v)
+            self.s = vmap(self.calc_s)
         
         
     def get_velocities(self) -> Tuple[torch.nn.Module, torch.nn.Module]:
@@ -134,7 +141,7 @@ class GMMInterpolant:
         return self.a(t)**2 * C0_i + self.b(t)**2 * C1_j
     
     
-    def calc_Cij_gam(
+    def calc_Cij_eps(
         self, 
         C0_i: Cov, 
         C1_j: Cov, 
@@ -150,14 +157,21 @@ class GMMInterpolant:
         C0_i: Cov,
         C1_j: Cov,
         t: Time,
-        x: Point
+        x: Point,
+        include_twopi: bool = True
     ) -> float:
         mij     = self.calc_mij(mu0_i, mu1_j, t)
-        Cij_gam = self.calc_Cij_gam(C0_i, C1_j, t)
-        Z       = (2*pi)**(self.d/2) * torch.exp(0.5*torch.slogdet(Cij_gam)[1])
-        
+        Cij_eps = self.calc_Cij_eps(C0_i, C1_j, t)
 
-        return torch.exp(-0.5*(x - mij) @ torch.inverse(Cij_gam) @ (x - mij)) / Z
+        if include_twopi:
+            Z = (2*pi)**(self.d/2) * torch.exp(0.5*torch.slogdet(Cij_eps)[1])
+        else:
+            Z = torch.exp(0.5*torch.slogdet(Cij_eps)[1])
+
+        inv_vec = torch.linalg.solve(Cij_eps, x-mij)
+        exp_arg = -0.5*(x - mij) @ inv_vec
+        exp_val = torch.exp(exp_arg)
+        return  exp_val / Z
 
 
     def calc_mij_dot(
@@ -181,15 +195,23 @@ class GMMInterpolant:
     def eval_distribution(
         self, 
         t: Time,
-        x: Point
+        x: Point,
+        as_tensor: bool = False,
+        include_twopi: bool = True
     ) -> float:
+        map_func = lambda mu0_i, mu1_j, C0_i, C1_j: self.eval_normal_ij(
+                mu0_i, mu1_j, C0_i, C1_j, t, x, include_twopi
+            )
         mat = vmap(
             vmap(
-                lambda mu0_i, mu1_j, C0_i, C1_j: self.eval_normal_ij(mu0_i, mu1_j, C0_i, C1_j, t, x), in_dims=(0, None, 0, None)
+                map_func, in_dims=(0, None, 0, None)
             ), in_dims = (None, 0, None, 0), out_dims=1
         )(self.mu0s, self.mu1s, self.C0s, self.C1s)
 
-        return self.p0s @ mat @ self.p1s
+        if as_tensor:
+            return self.p0s[:, None] * mat * self.p1s[None, :]
+        else:
+            return self.p0s @ mat @ self.p1s
 
 
     def calc_vij(
@@ -203,13 +225,16 @@ class GMMInterpolant:
         t: Time,
         x: Point
     ) -> Velocity:
-        mij_dot     = self.calc_mij_dot(mu0_i, mu1_j, t)
-        mij         = self.calc_mij(mu0_i, mu1_j, t)
-        Cij_dot     = self.calc_Cij_dot(C0_i, C1_j, t)
-        Cij_gam_inv = torch.inverse(self.calc_Cij_gam(C0_i, C1_j, t))
-        Nij         = self.eval_normal_ij(mu0_i, mu1_j, C0_i, C1_j, t, x)
+        mij_dot = self.calc_mij_dot(mu0_i, mu1_j, t)
+        mij     = self.calc_mij(mu0_i, mu1_j, t)
+        Cij_dot = self.calc_Cij_dot(C0_i, C1_j, t)
+        Cij_eps = self.calc_Cij_eps(C0_i, C1_j, t)
+        Nij     = self.eval_normal_ij(mu0_i, mu1_j, C0_i, 
+                                      C1_j, t, x, 
+                                      include_twopi=False)
+        inv_vec = torch.linalg.solve(Cij_eps, x-mij)
         
-        return p0_i*p1_j*(mij_dot + 0.5*Cij_dot @ Cij_gam_inv @ (x - mij))*Nij
+        return p0_i*p1_j*(mij_dot + 0.5*Cij_dot @ inv_vec)*Nij
 
 
     def calc_v(
@@ -225,7 +250,7 @@ class GMMInterpolant:
             ), in_dims=(None, 0, None, 0, None, 0), out_dims=1
         )(self.p0s, self.p1s, self.mu0s, self.mu1s, self.C0s, self.C1s)
         
-        return torch.sum(vijs.reshape(-1, self.d), axis=0) / self.eval_distribution(t, x)
+        return torch.sum(vijs.reshape(-1, self.d), axis=0) / self.eval_distribution(t, x, include_twopi=False)
 
 
     def calc_sij(
@@ -239,11 +264,12 @@ class GMMInterpolant:
         t: Time,
         x: Point
     ) -> Velocity:
-        mij         = self.calc_mij(mu0_i, mu1_j, t)
-        Cij_gam_inv = torch.inverse(self.calc_Cij_gam(C0_i, C1_j, t))
-        Nij         = self.eval_normal_ij(mu0_i, mu1_j, C0_i, C1_j, t, x)
+        mij     = self.calc_mij(mu0_i, mu1_j, t)
+        Cij_eps = torch.inverse(self.calc_Cij_eps(C0_i, C1_j, t))
+        Nij     = self.eval_normal_ij(mu0_i, mu1_j, C0_i, C1_j, t, x, include_twopi=False)
+        inv_vec = torch.linalg.solve(Cij_eps, x-mij)
 
-        return -p0_i*p1_j*Cij_gam_inv @ (x - mij) * Nij
+        return -p0_i*p1_j*inv_vec*Nij
 
 
     def calc_s(
@@ -258,4 +284,53 @@ class GMMInterpolant:
             ), in_dims=(None, 0, None, 0, None, 0), out_dims=1
         )(self.p0s, self.p1s, self.mu0s, self.mu1s, self.C0s, self.C1s)
 
-        return torch.sum(sijs.reshape(-1, self.d), axis=0) / self.eval_distribution(t, x)
+        return torch.sum(sijs.reshape(-1, self.d), axis=0) / self.eval_distribution(t, x, include_twopi=False)
+
+
+    def calc_velocities(
+        self,
+        t: Time,
+        x: Point,
+        compute_score: bool
+    ) -> torch.tensor:
+        func = self.calc_sij if compute_score else self.calc_vij
+
+        return vmap(
+            vmap(
+                lambda p0_i, p1_j, mu0_i, mu1_j, C0_i, C1_j: \
+                    func(p0_i, p1_j, mu0_i, mu1_j, C0_i, C1_j, t, x), in_dims=(0, None, 0, None, 0, None)
+            ), in_dims=(None, 0, None, 0, None, 0), out_dims=1
+        )(self.p0s, self.p1s, self.mu0s, self.mu1s, self.C0s, self.C1s)
+
+
+    def batch_velocity(
+        self, 
+        txs: torch.tensor, # [bs, d+1]
+        compute_score: bool
+    ) -> Velocity:
+        # get access to t and x individually
+        ts = txs[:, 0]    # [bs]
+        xs = txs[:, 1:]   # [bs, d]
+        bs = ts.shape[0]
+
+
+        # identify the most probable distribution over each element in the batch
+        dists     = vmap(lambda t, x: self.eval_distribution(
+            t, x, as_tensor=True, include_twopi=False
+        ))(ts, xs) # [bs, N0, N1]
+        dists     = dists.reshape((bs, self.N0*self.N1))                                    # [bs, N0*N1]
+        max_inds  = torch.argmax(dists, dim=1, keepdims=True)                               # [bs]
+        max_dists = vmap(lambda tens, kk: tens[kk])(dists, max_inds)                        # [bs]
+
+
+        # compute the velocities or scores
+        vijs = vmap(lambda t, x: self.calc_velocities(t, x, compute_score))(ts, xs) # [bs, N0, N1, d]
+        vijs = vijs.reshape(bs, self.N0*self.N1, self.d)                            # [bs, N0*N1, d]
+
+
+        # factor out the most probable distribution
+        # TODO: check if we need to "plug in" the correct answers...
+        dists /= max_dists
+        vijs /= max_dists[:, :, None]
+        
+        return torch.sum(vijs, axis=1) / torch.sum(dists, axis=1)[:, None]
