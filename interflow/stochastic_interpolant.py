@@ -113,6 +113,14 @@ class PFlowRHS(torch.nn.Module):
             return (self.rhs(x, t), -compute_div(self.rhs, x, t))
 
 
+    def reverse(self, t: torch.tensor, states: Tuple):
+        x = states[0]
+        if self.sample_only:
+            return (-self.rhs(x, t), torch.zeros(x.shape[0]).to(x))
+        else:
+            return (-self.rhs(x, t), compute_div(self.rhs, x, t))
+
+
 @dataclass
 class PFlowIntegrator:
     v: Velocity
@@ -130,8 +138,11 @@ class PFlowIntegrator:
         self.rhs.setup_rhs()
 
 
-    def rollout(self, x0: Sample):
-        integration_times = torch.linspace(0.0, 1.0, self.n_step).to(x0)
+    def rollout(self, x0: Sample, reverse=False):
+        if reverse:
+            integration_times = torch.linspace(1.0, 0.0, self.n_step).to(x0)
+        else:
+            integration_times = torch.linspace(0.0, 1.0, self.n_step).to(x0)
         dlogp = torch.zeros(x0.shape[0]).to(x0)
 
         state = odeint(
@@ -354,4 +365,3 @@ def loss_sv(
     loss_v = losses_v.mean()
     loss_s = losses_s.mean()
     return loss_v + loss_s, (loss_v, loss_s)
-

@@ -19,15 +19,23 @@ class InputWrapper(torch.nn.Module):
         super(InputWrapper, self).__init__()
         self.v = v
         
+
     def net_inp(
         self,
-        t: torch.tensor,  # [1]
+        t: torch.tensor,  # [1] or [batch x 1]
         x: torch.tensor   # [batch x dim]
     ) -> torch.tensor:    # [batch x (1 + dim)]
         """Concatenate time over the batch dimension."""
-        inp = torch.cat((t.repeat(x.shape[0]).unsqueeze(1), x), dim = 1)
+        if len(t.shape) == 0:
+            inp = torch.cat((t.repeat(x.shape[0]).unsqueeze(1), x), dim = 1)
+        elif t.shape[0] > 1 and x.shape[0] > 1:
+            inp = torch.column_stack((t, x))
+        else:
+            inp = torch.cat((t.repeat(x.shape[0]).unsqueeze(1), x), dim = 1)
+
         return inp
     
+
     def forward(self, x, t):
         tx = self.net_inp(t,x)
         return self.v(tx)
