@@ -35,6 +35,39 @@ def compute_div(
     return divergence.view(bs)
 
 
+class SFromEta(torch.nn.Module):
+    """Class for turning a noise model into a score model."""
+    def __init__(
+        self,
+        eta: Callable[[Sample, Time], torch.tensor],
+        gamma: Callable[[Time], torch.tensor],
+    ) -> None:
+        super(SFromEta, self).__init__()
+        self.eta = eta
+        self.gamma = gamma
+        
+    def forward(self, x, t):
+        val = (self.eta(x,t) / self.gamma(t))
+        return val
+
+
+class BFromVS(torch.nn.Module):
+    """Class for turning a velocity model and a score model into a drift model."""
+    def __init__(
+        self,
+        v: Callable[[Sample, Time], torch.tensor],
+        s: Callable[[Sample, Time], torch.tensor],
+        gg_dot: Callable[[Time], torch.tensor],
+    ) -> None:
+        super(BFromVS, self).__init__()
+        self.v = v
+        self.s = s
+        self.gg_dot = gg_dot
+
+        
+    def forward(self, x, t):
+        return v(x, t) - gg_dot*s(x, t)
+
 
 class Interpolant(torch.nn.Module):
     """
@@ -85,22 +118,18 @@ class Interpolant(torch.nn.Module):
 
 
 class PFlowRHS(torch.nn.Module):
-    def __init__(self, v: Velocity, s: Score, interpolant: Interpolant, sample_only=False):
+    def __init__(self, b: Velocity, interpolant: Interpolant, sample_only=False):
         super(PFlowRHS, self).__init__()
-        self.v = v
-        self.s = s
+        self.b = b
         self.interpolant = interpolant
         self.sample_only = sample_only
 
 
     def setup_rhs(self):
         def rhs(x: torch.tensor, t: torch.tensor):
-            # tx = net_inp(t, x)
-            self.v.to(x)
-            self.s.to(x)
-
+            self.b.to(x)
             t = t.unsqueeze(0)
-            return self.v(x,t) - self.interpolant.gg_dot(t)*self.s(x,t)
+            return self.b(x,t)
 
         self.rhs = rhs
 
@@ -123,8 +152,7 @@ class PFlowRHS(torch.nn.Module):
 
 @dataclass
 class PFlowIntegrator:
-    v: Velocity
-    s: Score
+    b: Velocity
     method: str
     interpolant: Interpolant
     n_step: int
@@ -134,7 +162,7 @@ class PFlowIntegrator:
 
 
     def __post_init__(self) -> None:
-        self.rhs = PFlowRHS(v=self.v, s=self.s, interpolant=self.interpolant, sample_only=self.sample_only)
+        self.rhs = PFlowRHS(b=self.b, interpolant=self.interpolant, sample_only=self.sample_only)
         self.rhs.setup_rhs()
 
 
@@ -160,7 +188,7 @@ class PFlowIntegrator:
 
 @dataclass
 class SDEIntegrator:
-    v: Velocity
+    b: Velocity
     s: Score
     dt: float
     eps: torch.tensor
@@ -171,24 +199,16 @@ class SDEIntegrator:
     
     def __post_init__(self) -> None:
         """Initialize forward dynamics, reverse dynamics, and likelihood."""
-        
-        
-        def b(x: torch.tensor, t: torch.tensor):
-            self.v.to(x)
-            self.s.to(x) ### needed to make lightning work. arises because using __post_init__
-            return (self.v(x,t) - self.interpolant.gg_dot(t)*self.s(x,t))
-        
-        
         def bf(x: torch.tensor, t: torch.tensor):
             """Forward drift. Assume x is batched but t is not."""
-            self.v.to(x)
+            self.b.to(x)
             self.s.to(x) ### needed to make lightning work. arises because using __post_init__
             return self.b(x,t) + self.eps*self.s(x,t)
 
 
         def br(x: torch.tensor, t: torch.tensor):
             """Backwards drift. Assume x is batched but t is not."""
-            self.v.to(x)
+            self.b.to(x)
             self.s.to(x) ### needed to make lightning work. arises because using __post_init__
             with torch.no_grad():
                 return self.b(x,t) - self.eps*self.s(x,t)
@@ -204,7 +224,6 @@ class SDEIntegrator:
             return -(compute_div(self.bf, x, t) + self.eps*s_norm)
 
         
-        self.b  = b
         self.bf = bf
         self.br = br
         self.dt_logp = dt_logp
@@ -318,50 +337,93 @@ class SDEIntegrator:
         return xs
 
 
-def loss_per_sample_sv(
-    v: Velocity,
+def loss_per_sample_s(
     s: Velocity,
     x0: Sample,
     x1: Sample,
     t: torch.tensor,
-    interpolant: Interpolant,
-    loss_fac: float
+    interpolant: Interpolant
+) -> torch.tensor:
+    """Compute the (variance-reduced) loss on an individual sample via antithetic sampling."""
+    xtp, xtm, z = interpolant.calc_antithetic_xts(t, x0, x1)
+    xtp, xtm, t = xtp.unsqueeze(0), xtm.unsqueeze(0), t.unsqueeze(0)
+    stp         = s(xtp, t)
+    stm         = s(xtm, t)
+    loss      = 0.5*torch.sum(stp**2) + (1 / interpolant.gamma(t))*torch.sum(stp*z)
+    loss     += 0.5*torch.sum(stm**2) - (1 / interpolant.gamma(t))*torch.sum(stm*z)
+    
+    return loss
+
+
+def loss_per_sample_eta(
+    eta: Velocity,
+    x0: Sample,
+    x1: Sample,
+    t: torch.tensor,
+    interpolant: Interpolant
+) -> torch.tensor:
+    """Compute the (variance-reduced) loss on an individual sample via antithetic sampling."""
+    xt, z   = interpolant.calc_xt(t, x0, x1)
+    xt, t   = xt.unsqueeze(0), t.unsqueeze(0)
+    eta_val = eta(xt, t)
+    return 0.5*torch.sum(eta_val**2) + torch.sum(eta_val*z) 
+    
+
+def loss_per_sample_v(
+    v: Velocity,
+    x0: Sample,
+    x1: Sample,
+    t: torch.tensor,
+    interpolant: Interpolant
+) -> torch.tensor:
+    """Compute the (variance-reduced) loss on an individual sample via antithetic sampling."""
+    xt, z = interpolant.calc_xt(t, x0, x1)
+    xt, t = xt.unsqueeze(0), t.unsqueeze(0)
+    dtIt  = interpolant.dtIt(t, x0, x1)
+    v_val = v(xt, t)
+    
+    return 0.5*torch.sum(v_val**2) - torch.sum(dtIt * v_val)
+
+
+def loss_per_sample_b(
+    b: Velocity,
+    x0: Sample,
+    x1: Sample,
+    t: torch.tensor,
+    interpolant: Interpolant
 ) -> torch.tensor:
     """Compute the (variance-reduced) loss on an individual sample via antithetic sampling."""
     xtp, xtm, z = interpolant.calc_antithetic_xts(t, x0, x1)
     xtp, xtm, t = xtp.unsqueeze(0), xtm.unsqueeze(0), t.unsqueeze(0)
     dtIt        = interpolant.dtIt(t, x0, x1)
-    dt_gam      = interpolant.gamma_dot(t)
-    vtp         = v(xtp, t)
-    vtm         = v(xtm, t)
-    loss_v      = 0.5*torch.sum(vtp**2) - torch.sum((dtIt) * vtp)
-    loss_v      += 0.5*torch.sum(vtm**2) - torch.sum((dtIt) * vtm)
+    gamma_dot   = interpolant.gamma_dot(t)
+    btp         = b(xtp, t)
+    btm         = b(xtm, t)
+    loss        = 0.5*torch.sum(btp**2) - torch.sum((dtIt + gamma_dot*z) * vtp)
+    loss       += 0.5*torch.sum(btm**2) - torch.sum((dtIt - gamma_dot*z) * vtm)
     
-    stp         = s(xtp, t)
-    stm         = s(xtm, t)
-    loss_s      = 0.5*torch.sum(stp**2) + (1 / interpolant.gamma(t))*torch.sum(stp*z)
-    loss_s      += 0.5*torch.sum(stm**2) - (1 / interpolant.gamma(t))*torch.sum(stm*z)
-    
-    return (loss_v, loss_fac * loss_s)
-
-    
-x0_batch_loss_sv = vmap(loss_per_sample_sv, in_dims=(None, None,    0, None, None, None, None), randomness='different')
-x1_batch_loss_sv = vmap(x0_batch_loss_sv,   in_dims=(None, None, None,    0, None, None, None), randomness='different')
-t_batch_loss_sv  = vmap(x1_batch_loss_sv,   in_dims=(None, None, None, None,    0, None, None), randomness='different')
+    return loss
 
 
-def loss_sv(
-    v: Velocity, 
-    s: Score,
-    x0s: torch.tensor,
-    x1s: torch.tensor, 
-    ts: torch.tensor, 
+def batch_loss(loss_per_sample: Callable) -> Callable:
+    """Convert a sample loss into a batched loss."""
+    x0_batch_loss = vmap(loss_per_sample, in_dims=(None,    0, None, None, None), randomness='different')
+    x1_batch_loss = vmap(x0_batch_loss,   in_dims=(None, None,    0, None, None), randomness='different')
+    t_batch_loss  = vmap(x1_batch_loss,   in_dims=(None, None, None,    0, None), randomness='different')
+    return t_batch_loss
+
+
+loss_s   = batch_loss(loss_per_sample_s)
+loss_v   = batch_loss(loss_per_sample_v)
+loss_b   = batch_loss(loss_per_sample_b)
+loss_eta = batch_loss(loss_per_sample_eta)
+
+
+def joint_loss(
+    loss1: Callable,
+    loss2: Callable,
     interpolant: Interpolant,
-    loss_fac: torch.tensor
-) -> Tuple[torch.tensor, Tuple[torch.tensor, torch.tensor]]:
-
-    losses_v, losses_s = t_batch_loss_sv(v, s, x0s, x1s, ts, interpolant, loss_fac)
-
-    loss_v = losses_v.mean()
-    loss_s = losses_s.mean()
-    return loss_v + loss_s, (loss_v, loss_s)
+    loss_fac: torch.tensor 
+) -> torch.tensor:
+    return lambda bv, seta, x0s, x1s, ts, loss_fac: \
+        (loss1(bv, x0s, x1s, ts, interpolant), loss_fac*loss2(seta, x0s, x1s, ts, interpolant))
