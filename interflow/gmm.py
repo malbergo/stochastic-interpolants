@@ -5,6 +5,7 @@ from typing import Callable, Tuple
 from functorch import vmap
 from math import pi
 from interflow import fabrics as fabrics
+from interflow import stochastic_interpolant as stochastic_interpolant
 
 
 Weight   = torch.tensor
@@ -45,13 +46,15 @@ class GMMInterpolant:
 
 
         # setup interpolant
-        self.gamma, self.gamma_dot, self.gg_dot = fabrics.make_gamma(self.gamma_type)
+        self.gamma, self.gamma_dot, self.gg_dot = \
+            fabrics.make_gamma(self.gamma_type)
         
         if self.path == 'linear':
             self.a    = lambda t: (1-t)
             self.b    = lambda t: t
             self.adot = lambda t: -1
             self.bdot = lambda t: 1
+            
         if self.path == 'trig':
             self.a    = lambda t: torch.sqrt(1 - self.gamma(t)**2)*torch.cos(0.5*pi*t)
             self.b    = lambda t: torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*pi*t)
@@ -59,11 +62,13 @@ class GMMInterpolant:
                                     - 0.5*pi*torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*pi*t)
             self.bdot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - self.gamma(t)**2)*torch.sin(0.5*pi*t) \
                                     + 0.5*pi*torch.sqrt(1 - self.gamma(t)**2)*torch.cos(0.5*pi*t)
+            
         elif self.path == 'encoding-decoding':
             self.a    = lambda t: torch.where(t <= 0.5, torch.cos(pi*t)**2, 0.)
             self.b    = lambda t: torch.where(t > 0.5,  torch.cos(pi*t)**2, 0.)
             self.adot = lambda t: torch.where(t <= 0.5, -2*pi*torch.cos(pi*t)*torch.sin(pi*t), 0.)
             self.bdot = lambda t: torch.where(t > 0.5,  -2*pi*torch.cos(pi*t)*torch.sin(pi*t), 0.)
+            
         elif self.path == 'one_sided':
             self.a    = lambda t: (1-t)
             self.b    = lambda t: 0
@@ -318,9 +323,9 @@ class GMMInterpolant:
         dists     = vmap(lambda t, x: self.eval_distribution(
             t, x, as_tensor=True, include_twopi=False
         ))(ts, xs) # [bs, N0, N1]
-        dists     = dists.reshape((bs, self.N0*self.N1))                                    # [bs, N0*N1]
-        max_inds  = torch.argmax(dists, dim=1, keepdims=True)                               # [bs]
-        max_dists = vmap(lambda tens, kk: tens[kk])(dists, max_inds)                        # [bs]
+        dists     = dists.reshape((bs, self.N0*self.N1))                            # [bs, N0*N1]
+        max_inds  = torch.argmax(dists, dim=1, keepdims=True)                       # [bs]
+        max_dists = vmap(lambda tens, kk: tens[kk])(dists, max_inds)                # [bs]
 
 
         # compute the velocities or scores

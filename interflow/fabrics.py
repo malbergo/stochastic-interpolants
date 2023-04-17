@@ -68,7 +68,8 @@ def make_fc_net(
 
 def make_It(
     path: str = 'linear', 
-    gamma: Callable = None
+    gamma: Callable = None,
+    gg_dot: Callable = None
 ):
     """gamma function must be specified if using the trigonometric interpolant"""
     if path == 'linear':
@@ -76,17 +77,18 @@ def make_It(
         dtIt = lambda _, x0, x1: x1 - x0
         
     elif path == 'trig':
-        if gamma == None:
-            raise TypeError("Gamma function must be provided for trigonometric interpolant!")
+        if gamma == None or gg_dot == None:
+            raise TypeError("Gamma and gg_dot functions must be provided for trigonometric interpolant!")
+
         a    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
         b    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
-        adot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t) \
+        adot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t) \
                                 - 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
-        bdot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
+        bdot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
                                 + 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
 
-        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
-        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
         
     elif path == 'encoding-decoding':
         def I_fn(t, x0, x1):

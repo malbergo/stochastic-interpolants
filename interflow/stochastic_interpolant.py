@@ -47,7 +47,7 @@ class SFromEta(torch.nn.Module):
         self.gamma = gamma
         
     def forward(self, x, t):
-        val = (self.eta(x,t) / self.gamma(t))
+        val = self.eta(x,t) / self.gamma(t)[:, None]
         return val
 
 
@@ -64,9 +64,8 @@ class BFromVS(torch.nn.Module):
         self.s = s
         self.gg_dot = gg_dot
 
-        
     def forward(self, x, t):
-        return v(x, t) - gg_dot*s(x, t)
+        return self.v(x, t) - self.gg_dot(t)[:, None]*self.s(x, t)
 
 
 class Interpolant(torch.nn.Module):
@@ -90,14 +89,15 @@ class Interpolant(torch.nn.Module):
         
         
         self.gamma, self.gamma_dot, self.gg_dot = fabrics.make_gamma(gamma_type=gamma_type)
-        if path == 'custom':
+        self.path = path
+        if self.path == 'custom':
             print('Assuming interpolant was passed in directly...')
             self.It = It
             self.dtIt = dtIt
             assert self.It != None
             assert self.dtIt != None
         else:
-            self.It, self.dtIt = fabrics.make_It(path, self.gamma)
+            self.It, self.dtIt = fabrics.make_It(self.path, self.gamma, self.gg_dot)
         
 
     def calc_xt(self, t: Time, x0: Sample, x1: Sample):
@@ -268,10 +268,12 @@ class SDEIntegrator:
 
     def rollout_likelihood(
         self, 
-        init: Sample # [batch x dim]
+        init: Sample, # [batch x dim]
+        t0: float = 0.0,
+        tf: float = 1.0
     ) -> torch.tensor:
         """Solve the reverse-time SDE to generate a likelihood estimate."""
-        n_step = int(torch.ceil(1.0/self.dt))
+        n_step = int((t0-tf)/self.dt)
         bs, d  = init.shape
         likes  = torch.zeros((self.n_likelihood, bs)).to(init)
         xs     = torch.zeros((self.n_likelihood, bs, d)).to(init)
@@ -279,7 +281,8 @@ class SDEIntegrator:
 
         # ensure we integrate to exactly t=1
         assert (n_step % self.n_save) == 0
-        assert n_step*self.dt == 1.0
+        print(n_step*self.dt, self.dt, tf-t0)
+        assert (n_step*self.dt - (tf-t0) < 1e-4)
 
 
         # TODO: for more general dimensions, need to replace these 1's by something else.
@@ -288,9 +291,8 @@ class SDEIntegrator:
         save_counter = 0
 
         for ii in range(n_step):
-            t    = 1 - torch.tensor(ii*self.dt).to(x)
-            # print("X SHAPE:", x.shape)
-            # print("T SHAPE:", t.shape)
+            t    = torch.tensor(tf - ii*self.dt).to(x)
+            t    = t.unsqueeze(0)
             x    = self.step_reverse_heun(x, t)
             like = self.step_likelihood(like, x, t-self.dt) # semi-implicit discretization?
                              
@@ -307,10 +309,12 @@ class SDEIntegrator:
     def rollout_forward(
         self, 
         init: Sample, # [batch x dim]
+        t0: float = 0.0,
+        tf: float = 1.0,
         method: str = 'heun'
     ) -> torch.tensor:
         """Solve the forward-time SDE to generate a batch of samples."""
-        n_step     = int(torch.ceil(1.0/self.dt))
+        n_step     = int((tf-t0)/self.dt)
         save_every = int(n_step/self.n_save)
         xs         = torch.zeros((self.n_save, *init.shape)).to(init)
         x          = init
@@ -318,12 +322,13 @@ class SDEIntegrator:
 
         # ensure we integrate to exactly t=1
         assert (n_step % self.n_save) == 0
-        assert n_step*self.dt == 1.0
+        assert (n_step*self.dt - (tf-t0) < 1e-4)
 
         save_counter = 0
         for ii in range(n_step):
-            t = torch.tensor(ii*self.dt).to(x)
+            t = t0 + torch.tensor(ii*self.dt).to(x)
             t = t.unsqueeze(0)
+            
             if method == 'heun':
                 x = self.step_forward_heun(x, t)
             else:
@@ -399,8 +404,8 @@ def loss_per_sample_b(
     gamma_dot   = interpolant.gamma_dot(t)
     btp         = b(xtp, t)
     btm         = b(xtm, t)
-    loss        = 0.5*torch.sum(btp**2) - torch.sum((dtIt + gamma_dot*z) * vtp)
-    loss       += 0.5*torch.sum(btm**2) - torch.sum((dtIt - gamma_dot*z) * vtm)
+    loss        = 0.5*torch.sum(btp**2) - torch.sum((dtIt + gamma_dot*z) * btp)
+    loss       += 0.5*torch.sum(btm**2) - torch.sum((dtIt - gamma_dot*z) * btm)
     
     return loss
 
@@ -410,7 +415,8 @@ def batch_loss(loss_per_sample: Callable) -> Callable:
     x0_batch_loss = vmap(loss_per_sample, in_dims=(None,    0, None, None, None), randomness='different')
     x1_batch_loss = vmap(x0_batch_loss,   in_dims=(None, None,    0, None, None), randomness='different')
     t_batch_loss  = vmap(x1_batch_loss,   in_dims=(None, None, None,    0, None), randomness='different')
-    return t_batch_loss
+    return lambda vel, x0s, x1s, ts, interpolant: \
+               torch.mean(t_batch_loss(vel, x0s, x1s, ts, interpolant))
 
 
 loss_s   = batch_loss(loss_per_sample_s)
@@ -425,5 +431,20 @@ def joint_loss(
     interpolant: Interpolant,
     loss_fac: torch.tensor 
 ) -> torch.tensor:
-    return lambda bv, seta, x0s, x1s, ts, loss_fac: \
-        (loss1(bv, x0s, x1s, ts, interpolant), loss_fac*loss2(seta, x0s, x1s, ts, interpolant))
+    """Construct a loss function that computes loss1 + loss_fac*loss_2"""
+    
+    def loss(
+        bv: Velocity,
+        seta: Velocity,
+        x0s: torch.tensor, 
+        x1s: torch.tensor, 
+        ts: torch.tensor, 
+        loss_fac: float
+    ) -> torch.tensor:
+        loss1_val = loss1(bv, x0s, x1s, ts, interpolant)
+        loss2_val = loss_fac*loss2(seta, x0s, x1s, ts, interpolant)
+        loss_val = loss1_val + loss2_val
+        
+        return loss_val, (loss1_val, loss2_val)
+    
+    return loss
