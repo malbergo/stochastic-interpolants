@@ -18,7 +18,7 @@ class InputWrapper(torch.nn.Module):
     def __init__(self, v: torch.nn.Module):
         super(InputWrapper, self).__init__()
         self.v = v
-        
+
 
     def net_inp(
         self,
@@ -176,7 +176,7 @@ def make_activation(
         return torch.nn.Sigmoid()
     elif act == 'softplus':
         return torch.nn.Softplus()
-    elif act == 'silu':
+    elif act == 'silu' or act == 'swish':
         return torch.nn.SiLU()
     elif act == 'Sigmoid2Pi':
         class Sigmoid2Pi(torch.nn.Sigmoid):

@@ -22,31 +22,26 @@ else:
 
 
 ## fix random seed so the GMM is the same across runs.
-torch.manual_seed(42)
+torch.manual_seed(1043)
 
 
 ## fixed parameters
-ndim          = 128
 N1            = 5
-scale         = 7.5
-scale_fac     = 3*sqrt(ndim)
-base_lr       = 2e-3
+base_lrs      = [1e-4, 1e-4]
 hidden_sizes  = [256, 256, 256, 256]
-in_size       = (ndim+1)
-out_size      = (ndim)
-inner_act     = 'relu'
+inner_act     = 'swish'
 final_act     = 'none'
-N_epochs      = 50000
-N_t           = 25
+N_epochs      = int(5e5)
 metrics_freq  = 500
 plot_freq     = 500
-save_freq     = 2000
-loss_fac      = 4.0
-ndata         = 20000
+save_freq     = 1000
+loss_fac      = 5.0
+ndata         = int(1e5)
 n_likelihood  = 5
 plot_bs       = 500
-prior_bs      = 100
-target_bs     = 200
+N_t           = int(1e4)
+prior_bs      = int(1e4)
+target_bs     = int(1e4)
 likelihood_bs = prior_bs
 dt            = torch.tensor(1e-2)
 eps           = torch.tensor(0.5)
@@ -54,7 +49,7 @@ eps           = torch.tensor(0.5)
 
 def get_simulation_parameters():
     """Process command line arguments and set up associated simulation parameters."""
-    parser = argparse.ArgumentParser(description='Run a MIPS simulation from the command line.')
+    parser = argparse.ArgumentParser(description='Run a GMM experiment.')
     parser.add_argument('--gamma_type', type=str, help='Choice of gamma.')
     parser.add_argument('--path', type=str, help='Choice of It.')
     parser.add_argument('--learn_b', type=int, help='Learn b or v.')
@@ -62,6 +57,8 @@ def get_simulation_parameters():
     parser.add_argument('--online_learning', type=int, help='Use learning?')
     parser.add_argument('--output_folder', type=str, help='Where to save.')
     parser.add_argument('--output_name', type=str, help='Where to save.')
+    parser.add_argument('--ndim', type=int, help='Problem dimension.')
+    parser.add_argument('--scale', type=float, help='Standard deviation of random means.')
     parser.add_argument('--wandb_name', type=str, help='WANDB run name.')
     parser.add_argument('--slurm_id', type=int, help='Slurm index.')
     return parser.parse_args()
@@ -69,17 +66,27 @@ def get_simulation_parameters():
 
 def construct_simulation(args):
     output_location = f'{args.output_folder}/{args.output_name}_{args.slurm_id}.npy'
+    scale_fac       = args.ndim
+    in_size         = args.ndim+1
+    out_size        = args.ndim
+
+
+    need_to_cap = args.learn_b or (not args.learn_eta)
+    t0_opt      = 1e-4 if need_to_cap else 0.0
+    tf_opt      = 1.0 - t0_opt
+
+
     sim = gmm_exp.GMMExp(
         learn_b=args.learn_b,
         learn_eta=args.learn_eta,
-        ndim=ndim,
+        ndim=args.ndim,
         N1=N1,
-        scale=scale,
+        scale=args.scale,
         scale_fac=scale_fac,
         gamma_type=args.gamma_type,
         path=args.path,
         device=device,
-        base_lr=base_lr,
+        base_lrs=base_lrs,
         hidden_sizes=hidden_sizes,
         in_size=in_size,
         out_size=out_size,
@@ -93,6 +100,8 @@ def construct_simulation(args):
         loss_fac=loss_fac,
         online_learning=args.online_learning,
         ndata=ndata if not args.online_learning else torch.inf,
+        t0_opt=t0_opt,
+        tf_opt=tf_opt,
         n_likelihood=n_likelihood,
         plot_bs=plot_bs,
         prior_bs=prior_bs,

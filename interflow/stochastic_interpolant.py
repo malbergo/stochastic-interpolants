@@ -47,7 +47,7 @@ class SFromEta(torch.nn.Module):
         self.gamma = gamma
         
     def forward(self, x, t):
-        val = self.eta(x,t) / self.gamma(t)[:, None]
+        val = -self.eta(x,t) / self.gamma(t)[:, None]
         return val
 
 
@@ -166,11 +166,11 @@ class PFlowIntegrator:
         self.rhs.setup_rhs()
 
 
-    def rollout(self, x0: Sample, reverse=False):
+    def rollout(self, x0: Sample, t0: float = 0.0, tf: float = 1.0, reverse: bool = False):
         if reverse:
-            integration_times = torch.linspace(1.0, 0.0, self.n_step).to(x0)
+            integration_times = torch.linspace(tf, t0, self.n_step).to(x0)
         else:
-            integration_times = torch.linspace(0.0, 1.0, self.n_step).to(x0)
+            integration_times = torch.linspace(t0, tf, self.n_step).to(x0)
         dlogp = torch.zeros(x0.shape[0]).to(x0)
 
         state = odeint(
@@ -354,8 +354,10 @@ def loss_per_sample_s(
     xtp, xtm, t = xtp.unsqueeze(0), xtm.unsqueeze(0), t.unsqueeze(0)
     stp         = s(xtp, t)
     stm         = s(xtm, t)
-    loss      = 0.5*torch.sum(stp**2) + (1 / interpolant.gamma(t))*torch.sum(stp*z)
-    loss     += 0.5*torch.sum(stm**2) - (1 / interpolant.gamma(t))*torch.sum(stm*z)
+#    loss        = 0.5*torch.sum(stp**2) + (1 / interpolant.gamma(t))*torch.sum(stp*z)
+#    loss       += 0.5*torch.sum(stm**2) - (1 / interpolant.gamma(t))*torch.sum(stm*z)
+
+    loss = 0.5*torch.sum(stp**2 + stm**2) + (1 / interpolant.gamma(t))*torch.sum((stp - stm)*z)
     
     return loss
 
@@ -371,7 +373,7 @@ def loss_per_sample_eta(
     xt, z   = interpolant.calc_xt(t, x0, x1)
     xt, t   = xt.unsqueeze(0), t.unsqueeze(0)
     eta_val = eta(xt, t)
-    return 0.5*torch.sum(eta_val**2) + torch.sum(eta_val*z) 
+    return 0.5*torch.sum(eta_val**2) - torch.sum(eta_val*z) 
     
 
 def loss_per_sample_v(
@@ -404,9 +406,11 @@ def loss_per_sample_b(
     gamma_dot   = interpolant.gamma_dot(t)
     btp         = b(xtp, t)
     btm         = b(xtm, t)
-    loss        = 0.5*torch.sum(btp**2) - torch.sum((dtIt + gamma_dot*z) * btp)
-    loss       += 0.5*torch.sum(btm**2) - torch.sum((dtIt - gamma_dot*z) * btm)
+#    loss        = 0.5*torch.sum(btp**2) - torch.sum((dtIt + gamma_dot*z) * btp)
+#    loss       += 0.5*torch.sum(btm**2) - torch.sum((dtIt - gamma_dot*z) * btm)
     
+    loss        = 0.5*torch.sum(btp**2 + btm**2) - torch.sum(dtIt*(btp + btm) + gamma_dot*z*(btp - btm))
+
     return loss
 
 
@@ -419,10 +423,28 @@ def batch_loss(loss_per_sample: Callable) -> Callable:
                torch.mean(t_batch_loss(vel, x0s, x1s, ts, interpolant))
 
 
-loss_s   = batch_loss(loss_per_sample_s)
-loss_v   = batch_loss(loss_per_sample_v)
-loss_b   = batch_loss(loss_per_sample_b)
-loss_eta = batch_loss(loss_per_sample_eta)
+def group_batch_loss(loss_per_sample: Callable) -> Callable:
+    batched_loss = vmap(
+        loss_per_sample,
+        in_dims=(None, 0, 0, 0, None),
+        randomness='different'
+    )
+    
+    return lambda vel, x0s, x1s, ts, interpolant: \
+               torch.mean(batched_loss(vel, x0s, x1s, ts, interpolant))
+        
+
+
+#loss_s   = batch_loss(loss_per_sample_s)
+#loss_v   = batch_loss(loss_per_sample_v)
+#loss_b   = batch_loss(loss_per_sample_b)
+#loss_eta = batch_loss(loss_per_sample_eta)
+
+
+loss_s   = group_batch_loss(loss_per_sample_s)
+loss_v   = group_batch_loss(loss_per_sample_v)
+loss_b   = group_batch_loss(loss_per_sample_b)
+loss_eta = group_batch_loss(loss_per_sample_eta)
 
 
 def joint_loss(
