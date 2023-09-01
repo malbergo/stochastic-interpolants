@@ -13,6 +13,10 @@ A demonstration notebook for defining an interpolant $x_t = I(t, x_0, x_1) + \ga
 and learning the associated velocity fields $b(x, t)$ and $s(x, t)$ (the score function) 
 can be found in `notebooks/checker.ipynb`. This can be done with a score function model $s(t,x)$ or a denoiser model $\eta(t,x)$, which is related to the score via: $\eta(t,x) = -\gamma s(t,x)$ for two-sided interpolants and $\eta(t,x) = -\alpha s(t,x)$ for one-sided.
 
+Another demonstration is available to do **mirror interpolation** from a dataset to itself, whereby a diffusion can be learned that resamples the distribution! The interpolant here is $x_t = x_0 + \gamma(t) x_1$, where $x_0 \sim \rho_{\data}$.
+
+<img src="mirror_ex1.png"  width="675" height="300">
+
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
 case where $\rho_0$ and $\rho_1$ are both Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
 
