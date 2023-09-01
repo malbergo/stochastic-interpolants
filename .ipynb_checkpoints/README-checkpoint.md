@@ -15,7 +15,7 @@ can be found in `notebooks/checker.ipynb`. This can be done with a score functio
 
 Another demonstration is available to do **mirror interpolation** from a dataset to itself, whereby a diffusion can be learned that resamples the distribution! The interpolant here is $x_t = x_0 + \gamma(t) x_1$, where $x_0 \sim \rho_{\data}$.
 
-<img src="mirror_ex1.png"  width="800" height="200">
+<img src="mirror_ex1.png"  width="800" height="150">
 
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
 case where $\rho_0$ and $\rho_1$ are both Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
