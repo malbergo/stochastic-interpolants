@@ -24,7 +24,7 @@ ODE and SDE integrators (ODE based on `torchdiffeq`, SDE hand-written), as well 
 
 With these tools, we are free to do simulation free generation from either deterministic or stochastic dynamics, with variable level of noise:
 
-<img src="imgs_ode_sde_flowers_many_eps_paper.png"  width="600" height="600">
+<img src="imgs_ode_sde_flowers_many_eps_paper.png"  width="700" height="500">
 
 
 
