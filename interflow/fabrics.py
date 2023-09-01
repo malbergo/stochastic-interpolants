@@ -4,18 +4,10 @@ from . import util
 import math
 import hashlib
 import os
-from typing import Callable
-
 
 
 class InputWrapper(torch.nn.Module):
-    """
-    Helper function that makes it so a velocity field parameterized by
-    a neural network can be evaluated like v(x,t) e.g. having two inputs
-    rather than stacking x [ndim] and t [1] to a [ndim + 1] shaped single
-    input.
-    """
-    def __init__(self, v: torch.nn.Module):
+    def __init__(self, v):
         super(InputWrapper, self).__init__()
         self.v = v
         
@@ -32,16 +24,7 @@ class InputWrapper(torch.nn.Module):
         tx = self.net_inp(t,x)
         return self.v(tx)
 
-
-def make_fc_net(
-    hidden_sizes: int, 
-    in_size: int, 
-    out_size: int, 
-    inner_act: str, 
-    final_act: str, 
-    **config
-):
-    """Construct a fully-connected network."""
+def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config):
     sizes = [in_size] + hidden_sizes + [out_size]
     net = []
     for i in range(len(sizes) - 1):
@@ -54,66 +37,94 @@ def make_fc_net(
             if make_activation(final_act):
                 net.append(make_activation(final_act))
                 
-    net = torch.nn.Sequential(*net)
-    return InputWrapper(net)
+    v_net = torch.nn.Sequential(*net)
+    return InputWrapper(v_net)
 
 
-def make_It(
-    path: str = 'linear', 
-    gamma: Callable = None
-):
+
+
+
+def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
     """gamma function must be specified if using the trigonometric interpolant"""
+
     if path == 'linear':
-        It   = lambda t, x0, x1: (1 - t)*x0 + t*x1
-        dtIt = lambda _, x0, x1: x1 - x0
+        
+        
+        a      = lambda t: (1-t)
+        adot   = lambda t: -1.0
+        b      = lambda t: t
+        bdot   = lambda t: 1.0
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda _, x0, x1: bdot(t) + adot(t)
         
     elif path == 'trig':
         if gamma == None:
             raise TypeError("Gamma function must be provided for trigonometric interpolant!")
         a    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
         b    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
-        adot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t) \
+        adot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t) \
                                 - 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
-        bdot = lambda t: -self.gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
+        bdot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
                                 + 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
 
         It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
         dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
         
     elif path == 'encoding-decoding':
-        def I_fn(t, x0, x1):
-                if t <= torch.tensor(1/2):
-                    return (torch.cos(  math.pi * t)**2)*x0
-                elif t >= torch.tensor(1/2):
-                    return (torch.cos(  math.pi * t)**2)*x1
 
-        It  = I_fn
+        a    = lambda t: torch.where(t <= 0.5, torch.cos(math.pi*t)**2, torch.tensor(0.))
+        adot = lambda t: torch.where(t <= 0.5, -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
+        b    = lambda t: torch.where(t > 0.5,  torch.cos(math.pi*t)**2, 0.)
+        bdot = lambda t: torch.where(t > 0.5,  -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
+        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
+        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
+    
+    elif path == 'one-sided-linear':
+        
+        #### 06/08/2023: Also trying It = 1-t x0 + t x1
+        a      = lambda t: (1-t)
+        adot   = lambda t: -1.0
+        b      = lambda t: t
+        bdot   = lambda t: 1.0
+        
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
 
-        def dtI_fn(t,x0,x1):
-            if t < torch.tensor(1/2):
-                return -(1/2)* torch.sin(  math.pi * t) * torch.cos(  math.pi * t)*x0
-            else:
-                return -(1/2)* torch.sin(  math.pi * t) * torch.cos( math.pi * t)*x1
+    elif path == 'one-sided-trig':
 
-        dtIt = dtI_fn
+        #### 06/09/2023: Also trying It = cos(pi/2 t) x0 + sin(pi/2 t) x1
+        a      = lambda t: torch.cos(0.5*math.pi*t)
+        adot   = lambda t: -0.5*math.pi*torch.sin(0.5*math.pi*t)
+        b      = lambda t: torch.sin(0.5*math.pi*t)
+        bdot   = lambda t: 0.5*math.pi*torch.cos(0.5*math.pi*t)
 
-    elif path == 'one-sided':
-        It   = lambda t, x0, x1: (1-t)*x0 + torch.sqrt(t)*torch.randn(x0.shape)
-        dtIt = lambda t, x0, x1: -x0 + 1/(2*torch.sqrt(t))*torch.randn(x0.shape)
-
+        
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
+        
+    elif path == 'mirror':
+        if gamma == None:
+            raise TypeError("Gamma function must be provided for mirror interpolant!")
+        
+        a     = lambda t: gamma(t)
+        adot  = lambda t: gamma_dot(t)
+        b     = lambda t: torch.tensor(1.0)
+        bdot  = lambda t: torch.tensor(0.0)
+        
+        It    = lambda t, x0, x1: b(t)*x1 + a(t)*x0
+        dtIt  = lambda t, x0, x1: adot(t)*x0
+        
     elif path == 'custom':
-        return None, None
+        return None, None, None
 
     else:
         raise NotImplementedError("The interpolant you specified is not implemented.")
 
+    
+    return It, dtIt, (a, adot, b, bdot)
 
-    return It, dtIt
 
-
-def make_gamma(
-    gamma_type: str = 'brownian'
-):
+def make_gamma(gamma_type = 'brownian', aval = None):
     """
     returns callable functions for gamma, gamma_dot,
     and gamma(t)*gamma_dot(t) to avoid numerical divide by 0s,
@@ -123,6 +134,11 @@ def make_gamma(
         gamma = lambda t: torch.sqrt(t*(1-t))
         gamma_dot = lambda t: (1/(2*torch.sqrt(t*(1-t)))) * (1 -2*t)
         gg_dot = lambda t: (1/2)*(1-2*t)
+        
+    elif gamma_type == 'a-brownian':
+        gamma = lambda t: torch.sqrt(a*t*(1-t))
+        gamma_dot = lambda t: (1/(2*torch.sqrt(a*t*(1-t)))) * a*(1 -2*t)
+        gg_dot = lambda t: (a/2)*(1-2*t)
         
     elif gamma_type == 'zero':
         gamma = gamma_dot = gg_dot = lambda t: torch.zeros_like(t)
@@ -143,15 +159,20 @@ def make_gamma(
         gamma_dot = lambda t: (-f)*( 1 - torch.sigmoid(-1 + f*(t - (1/2))) )*torch.sigmoid(-1 + f*(t - (1/2)))  + f*(1 - torch.sigmoid(1 + f*(t - (1/2)))  )*torch.sigmoid(1 + f*(t - (1/2)))
         gg_dot = lambda t: gamma(t)*gamma_dot(t)
         
+    elif gamma_type == None:
+        gamma     = lambda t: torch.zeros(1) ### no gamma
+        gamma_dot = lambda t: torch.zeros(1) ### no gamma
+        gg_dot    = lambda t: torch.zeros(1) ### no gamma
+        
     else:
         raise NotImplementedError("The gamma you specified is not implemented.")
         
+                
     return gamma, gamma_dot, gg_dot
 
 
-def make_activation(
-    act: str
-):
+
+def make_activation(act):
     if act == 'elu':
         return torch.nn.ELU()
     if act == 'leaky_relu':
@@ -177,62 +198,3 @@ def make_activation(
         return None
     else:
         raise NotImplementedError(f'Unknown activation function {act}')
-
-
-def make_optimizer(model, opt_type, opt_cfg, model_prefix):
-    opt = getattr(torch.optim, opt_type)(model.parameters(), **opt_cfg)
-    maybe_load_optimizer(opt, model_prefix=model_prefix, opt_cfg=opt_cfg)
-    return opt
-
-
-def maybe_load_optimizer(optimizer, *, model_prefix, opt_cfg):
-    if model_prefix is None:
-        return
-
-    opt_path = '{}.opt.pt'.format(model_prefix)
-    if not os.path.exists(opt_path):
-        print(f"No optimizer state found at {opt_path}")
-        return
-
-    state_dict = torch.load(opt_path)
-    # Ovverride lr for loaded optimizer
-    if opt_cfg.get('lr', None) is not None:
-        for param_group in state_dict['param_groups']:
-            param_group['lr'] = opt_cfg['lr']
-    try:
-        optimizer.load_state_dict(state_dict)
-    except ValueError as e:
-        print("WARNING: Could not load optimizer state", e)
-
-
-def make_scheduler(*, optimizer, sched_type, **sched_config):
-    if sched_type == 'Adal':
-        return getattr(scheduler, sched_type)(optimizer, **sched_config)
-    else:
-        class Mixing(getattr(torch.optim.lr_scheduler, sched_type)):
-            def __init__(self, *, N, lr_m, **kwargs):
-                super().__init__(**kwargs)
-            def step(self, *args, **kwargs):
-                super().step()
-
-        return Mixing(optimizer=optimizer, **sched_config)
-
-    
-def load_model(model, *, model_prefix, device, _run=None):
-    assert model_prefix is not None
-    return maybe_load_model(model, model_prefix=model_prefix, device=device, _run=_run)
-
-
-def maybe_load_model(model, *, model_prefix, strict=False):
-    if model_prefix is None:
-        print('model_prefix is None, skipping model load')
-        return
-    # if hvd.rank() == 0:
-    model_path = '{}.pt'.format(model_prefix)
-    print("Loading model %s" % (model_path, ))
-    # if _run is not None:
-        # _run.open_resource(model_path) # log as a resource
-    state_dict = torch.load(model_path, map_location='cpu')
-    model.load_state_dict(state_dict, strict=strict)
-    # model.to(device)
-    print("---> after loading model hash:", util.hash_model_parameters(model).hex())

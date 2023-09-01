@@ -10,8 +10,8 @@ This repository provides a very simple implementation of the stochastic interpol
 The intent of this repository is to provide the reader with an interactive tool to understand the mechanisms of the framework, as well as to reproduce any figures in [2].
 
 A demonstration notebook for defining an interpolant $x_t = I(t, x_0, x_1) + \gamma(t) z$ 
-and learning the associated velocity fields $v(x, t)$ and $s(x, t)$ (the score function) 
-can be found in `notebooks/checker.ipynb`. 
+and learning the associated velocity fields $b(x, t)$ and $s(x, t)$ (the score function) 
+can be found in `notebooks/checker.ipynb`. This can be done with a score function model $s(t,x)$ or a denoiser model $\eta(t,x)$, which is related to the score via: $\eta(t,x) = -\gamma s(t,x)$ for two-sided interpolants and $\eta(t,x) = -\alpha s(t,x)$ for one-sided.
 
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
 case where $\rho_0$ and $\rho_1$ are both Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.

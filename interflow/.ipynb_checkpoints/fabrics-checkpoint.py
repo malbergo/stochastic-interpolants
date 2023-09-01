@@ -1,12 +1,9 @@
 import numpy as np
 import torch
 from . import util
-from . import interpolant
-from . import net
 import math
 import hashlib
 import os
-
 
 
 class InputWrapper(torch.nn.Module):
@@ -44,251 +41,134 @@ def make_fc_net(hidden_sizes, in_size, out_size, inner_act, final_act, **config)
     return InputWrapper(v_net)
 
 
-def make_u_net(unet_dim, dim_mult, channels, learned_sinusoidal_cond, **config):
-    return net.Unet(dim = unet_dim,
-                dim_mults = dim_mult,
-                channels = channels,
-                learned_sinusoidal_cond=learned_sinusoidal_cond 
-                )
-
-
-def make_interpolant(n_coeffs):
-    
-    return interpolant.interpolant_func(n_coeffs)
 
 
 
-def _sample_t_beta(batch_size = 1):
-    beta = torch.distributions.beta.Beta(1.0, 0.7)
-    return beta.sample((batch_size,)).to(util.get_torch_device())
+def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
+    """gamma function must be specified if using the trigonometric interpolant"""
 
-def _sample_t_unif(batch_size = 1):
-    return torch.rand(batch_size, device=util.get_torch_device())
-
-
-def _sample_t(batch_size = 1):
-    return torch.rand(batch_size)
-
-
-def at(t):
-    return (1.0-t)
-
-def dtat(t):
-    return - torch.ones(t.shape)
-
-def bt(t):
-    return t
-
-def dtbt(t):
-    return torch.ones(t.shape)
-
-def make_loss(loss_type, **config):
-
-    if loss_type == 'learned_interpolant':
+    if path == 'linear':
         
-        def fn(v, x0, xf, N_t, interpolant_func, **config):
-            ts = _sample_t(N_t)
-            n_x0 = len(x0)
-            n_xf = len(xf)
-
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                txf = (interpolant_func.b(t))*xf
-                tx0 = (interpolant_func.a(t))*x0
-                xt = (tx0[:, None, :] + txf[None, :,:])
-                t_xt = torch.cat([t.repeat(n_x0*n_xf).unsqueeze(1), xt.reshape(n_x0*n_xf, -1)], dim = 1)
-                vtk = v(t_xt.squeeze(-1)).reshape(xt.shape)
-
-                losses[i] = ((torch.norm(vtk, dim=-1)**2) 
-                             + torch.tensor(2.0)*torch.sum(interpolant_func.dtIt(x0, xf, t) * vtk, dim=-1))
-
-                # interpolant_func.dtIt(x0, xf, t)
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-
-        return fn
-    
-    elif loss_type == 'basic_interpolant':
         
-        def fn(v, x0, xf, N_t, interpolant_func, **config):
-            ts = _sample_t(N_t)
-            n_x0 = len(x0)
-            n_xf = len(xf)
-
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                xt = interpolant_func.It(t, x0, xf)
-                t_xt = torch.cat([t.repeat(n_x0*n_xf).unsqueeze(1), xt.reshape(n_x0*n_xf, -1)], dim = 1)
-                vtk = v(t_xt.squeeze(-1)).reshape(xt.shape)
-
-                losses[i] = ((torch.norm(vtk, dim=-1)**2) 
-                             + torch.tensor(2.0)*torch.sum(interpolant_func.dtIt(x0, xf, t) * vtk, dim=-1))
-
-
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-
-        return fn
-    
-    elif loss_type == 'noisy_interpolant':
+        a      = lambda t: (1-t)
+        adot   = lambda t: -1.0
+        b      = lambda t: t
+        bdot   = lambda t: 1.0
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda _, x0, x1: bdot(t) + adot(t)
         
-        def fn(v, x0, xf, N_t, interpolant_func, **config):
-            ts = _sample_t(N_t)
-            n_x0 = len(x0)
-            n_xf = len(xf)
-            d = x0.shape[-1]
+    elif path == 'trig':
+        if gamma == None:
+            raise TypeError("Gamma function must be provided for trigonometric interpolant!")
+        a    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
+        b    = lambda t: torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
+        adot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t) \
+                                - 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t)
+        bdot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
+                                + 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
 
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                Bt_val = interpolant_func.Bt(t, Bt_shape = (n_x0, n_xf, d))
-                xt = interpolant_func.It(t, x0, xf, Bt_val)
-                t_xt = torch.cat([t.repeat(n_x0*n_xf).unsqueeze(1), xt.reshape(n_x0*n_xf, -1)], dim = 1)
-                vtk = v(t_xt.squeeze(-1)).reshape(xt.shape)
-
-                losses[i] = ((torch.norm(vtk, dim=-1)**2) 
-                             - torch.tensor(2.0)*torch.sum(interpolant_func.dtIt(x0, xf, Bt_val, t) * vtk, dim=-1))
-
-
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-
-        return fn
-    
-    elif loss_type == 'interpolant_imgs':
+        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
+        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
         
-        def fn(v, x0, xf, N_t, img_size, **config):
-            ts = _sample_t(N_t)
-            n_x0 = len(x0)
-            n_xf = len(xf)
+    elif path == 'encoding-decoding':
 
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                txf = bt(t)*xf
-                tx0 = at(t)*x0
-
-                xt = (tx0[:, None, :] + txf[None, :,:])
-                t_rep = t.repeat(n_x0*n_xf)
-                xt = xt.reshape(n_x0*n_xf, 1, img_size, img_size)
-                vtk = v(xt, t_rep).reshape(xt.shape[0],xt.shape[1],-1)
-  
-
-                losses[i] = ((torch.norm(vtk, dim=-1)**2).reshape(n_x0,n_xf)
-                             + (torch.tensor(2.0)*(torch.sum((dtat(t)*x0[:, None, :] + dtbt(t)*xf[None, :, :]) * vtk.reshape(n_x0,n_xf, img_size**2), dim=-1))))
-
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-        
-        return fn
-    elif loss_type == 'interpolant_imgsv2':
-        
-        def fn(v, x0, xf, N_t, img_size, **config):
-            ts = _sample_t(N_t).to(x0)
-            n_x0 = len(x0)
-            n_xf = len(xf)
-            
-
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                txf = bt(t)*xf
-                tx0 = at(t)*x0
-
-                xt = (tx0[:, None, :] + txf[None, :,:])
-                t_rep = t.repeat(n_x0*n_xf)
-                xt = xt.reshape(n_x0*n_xf, -1, img_size, img_size)
-                vtk = v(xt, t_rep).reshape(xt.shape[0],xt.shape[1],-1)
-  
-                
-                dt_xt = (dtat(t)*x0[:, None, :] + dtbt(t)*xf[None, :, :]).reshape(n_x0,n_xf, -1, img_size**2)
-                losses[i] = ((torch.norm(vtk, dim=(-1,-2))**2).reshape(n_x0,n_xf)
-                             + (torch.tensor(2.0)*(torch.sum(dt_xt * vtk.reshape(n_x0,n_xf, -1, img_size**2), dim=(-1,-2 ) ))))
-
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-        
-        return fn
+        a    = lambda t: torch.where(t <= 0.5, torch.cos(math.pi*t)**2, torch.tensor(0.))
+        adot = lambda t: torch.where(t <= 0.5, -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
+        b    = lambda t: torch.where(t > 0.5,  torch.cos(math.pi*t)**2, 0.)
+        bdot = lambda t: torch.where(t > 0.5,  -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
+        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
+        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
     
-    elif loss_type == 'learned_interpolant_imgs':
+    elif path == 'one-sided-linear':
         
-        def fn(v, x0, xf, N_t, img_size, interpolant_func, **config):
-            ts = _sample_t(N_t)
-            n_x0 = len(x0)
-            n_xf = len(xf)
-
-            losses = torch.empty((len(ts), n_x0, n_xf))
-            for i,t in enumerate(ts):
-                txf = bt(t)*xf
-                tx0 = at(t)*x0
-                xt = (tx0[:, None, :] + txf[None, :,:])
-                xt = xt.reshape(n_x0*n_xf, 3, img_size, img_size)
-                t_rep = t.repeat(n_x0*n_xf)
-                
-                vtk = v(xt, t_rep).reshape(xt.shape[0],xt.shape[1],-1)
-                
-                dt_xt = interpolant_func.dtIt(x0, xf, t).reshape(n_x0,n_xf, -1, img_size**2)
-                # dt_xt = (dtat(t)*x0[:, None, :] + dtbt(t)*xf[None, :, :]).reshape(n_x0,n_xf, -1, img_size**2)
-                losses[i] = ((torch.norm(vtk, dim=(-1,-2))**2).reshape(n_x0,n_xf)
-                             + torch.tensor(2.0)*torch.sum(dt_xt * vtk.reshape(n_x0,n_xf, -1, img_size**2), dim=(-1, -2)))
-
-                # interpolant_func.dtIt(x0, xf, t)
-            return losses.sum() / (len(ts)*n_x0*n_xf) #ts
-
-        return fn
-    
-    elif loss_type == 'fast_interpolant':
-    
-        def fn(v, x0, xf, uniform_t, **config):
-            
-            assert len(x0) == len(xf)
-            n_samp = len(x0)
-            
-            if uniform_t:
-                ts = _sample_t_unif(n_samp)
-            else:
-                ts = _sample_t_beta(n_samp)
-
-            txf = bt(ts)[..., None, None, None]*xf
-            tx0 = at(ts)[..., None, None, None]*x0
-            
-            xt = tx0 + txf
-            dt_xt = (dtat(ts)[..., None, None, None]*x0 
-                     + dtbt(ts)[..., None, None, None]*xf).reshape(xt.shape[0],xt.shape[1],-1)
-            
-            
-            vtk = v(xt, ts).reshape(xt.shape[0],xt.shape[1],-1)
-
-            losses = ((torch.norm(vtk, dim=(1,2))**2)
-                             + (torch.tensor(2.0)*(torch.sum( dt_xt * vtk, dim=(1,2)))))
-
-            return losses.sum() / n_samp
+        #### 06/08/2023: Also trying It = 1-t x0 + t x1
+        a      = lambda t: (1-t)
+        adot   = lambda t: -1.0
+        b      = lambda t: t
+        bdot   = lambda t: 1.0
         
-        return fn
-    
-    elif loss_type == 'fast_interpolant_tabular':
-    
-        def fn(v, x0, xf, uniform_t, **config):
-            
-            assert len(x0) == len(xf)
-            n_samp = len(x0)
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
 
-            if uniform_t:
-                ts = _sample_t_unif(n_samp)
-            else:
-                ts = _sample_t_beta(n_samp)
+    elif path == 'one-sided-trig':
 
-            txf = bt(ts)[..., None]*xf
-            tx0 = at(ts)[..., None]*x0
-            
-            xt = tx0 + txf
-            dt_xt = (dtat(ts)[..., None]*x0 
-                     + dtbt(ts)[..., None]*xf).reshape(xt.shape[0],-1)
-            
-            t_xt = torch.cat([ts.unsqueeze(1), xt.reshape(n_samp, -1)], dim = 1)
-            vtk = v(t_xt).reshape(xt.shape[0],-1)
+        #### 06/09/2023: Also trying It = cos(pi/2 t) x0 + sin(pi/2 t) x1
+        a      = lambda t: torch.cos(0.5*math.pi*t)
+        adot   = lambda t: -0.5*math.pi*torch.sin(0.5*math.pi*t)
+        b      = lambda t: torch.sin(0.5*math.pi*t)
+        bdot   = lambda t: 0.5*math.pi*torch.cos(0.5*math.pi*t)
 
-            losses = ((torch.norm(vtk, dim=(-1))**2)
-                             + (torch.tensor(2.0)*(torch.sum( dt_xt * vtk, dim=(-1)))))
-
-            return losses.sum() / n_samp
         
-        return fn
-    
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
+        
+    elif path == 'mirror':
+        if gamma == None:
+            raise TypeError("Gamma function must be provided for mirror interpolant!")
+        
+        a     = lambda t: gamma(t)
+        adot  = lambda t: gamma_dot(t)
+        b     = lambda t: torch.tensor(1.0)
+        bdot  = lambda t: torch.tensor(0.0)
+        
+        It    = lambda t, x0, x1: b(t)*x1 + a(t)*x0
+        dtIt  = lambda t, x0, x1: adot(t)*x0
+        
+    elif path == 'custom':
+        return None, None, None
+
     else:
-        raise NotImplementedError('loss type {loss_type}')
+        raise NotImplementedError("The interpolant you specified is not implemented.")
+
+    
+    return It, dtIt, (a, adot, b, bdot)
+
+
+def make_gamma(gamma_type = 'brownian', aval = None):
+    """
+    returns callable functions for gamma, gamma_dot,
+    and gamma(t)*gamma_dot(t) to avoid numerical divide by 0s,
+    e.g. if one is using the brownian (default) gamma.
+    """
+    if gamma_type == 'brownian':
+        gamma = lambda t: torch.sqrt(t*(1-t))
+        gamma_dot = lambda t: (1/(2*torch.sqrt(t*(1-t)))) * (1 -2*t)
+        gg_dot = lambda t: (1/2)*(1-2*t)
+        
+    elif gamma_type == 'a-brownian':
+        gamma = lambda t: torch.sqrt(a*t*(1-t))
+        gamma_dot = lambda t: (1/(2*torch.sqrt(a*t*(1-t)))) * a*(1 -2*t)
+        gg_dot = lambda t: (a/2)*(1-2*t)
+        
+    elif gamma_type == 'zero':
+        gamma = gamma_dot = gg_dot = lambda t: torch.zeros_like(t)
+
+    elif gamma_type == 'bsquared':
+        gamma = lambda t: t*(1-t)
+        gamma_dot = lambda t: 1 -2*t
+        gg_dot = lambda t: gamma(t)*gamma_dot(t)
+        
+    elif gamma_type == 'sinesquared':
+        gamma = lambda t: torch.sin(math.pi * t)**2
+        gamma_dot = lambda t: 2*math.pi*torch.sin(math.pi * t)*torch.cos(math.pi*t)
+        gg_dot = lambda t: gamma(t)*gamma_dot(t)
+        
+    elif gamma_type == 'sigmoid':
+        f = torch.tensor(10.0)
+        gamma = lambda t: torch.sigmoid(f*(t-(1/2)) + 1) - torch.sigmoid(f*(t-(1/2)) - 1) - torch.sigmoid((-f/2) + 1) + torch.sigmoid((-f/2) - 1)
+        gamma_dot = lambda t: (-f)*( 1 - torch.sigmoid(-1 + f*(t - (1/2))) )*torch.sigmoid(-1 + f*(t - (1/2)))  + f*(1 - torch.sigmoid(1 + f*(t - (1/2)))  )*torch.sigmoid(1 + f*(t - (1/2)))
+        gg_dot = lambda t: gamma(t)*gamma_dot(t)
+        
+    elif gamma_type == None:
+        gamma     = lambda t: torch.zeros(1) ### no gamma
+        gamma_dot = lambda t: torch.zeros(1) ### no gamma
+        gg_dot    = lambda t: torch.zeros(1) ### no gamma
+        
+    else:
+        raise NotImplementedError("The gamma you specified is not implemented.")
+        
+                
+    return gamma, gamma_dot, gg_dot
 
 
 
@@ -318,70 +198,3 @@ def make_activation(act):
         return None
     else:
         raise NotImplementedError(f'Unknown activation function {act}')
-
-        
-                
-
-def make_optimizer(model, opt_type, opt_cfg, model_prefix):
-    opt = getattr(torch.optim, opt_type)(model.parameters(), **opt_cfg)
-    maybe_load_optimizer(opt, model_prefix=model_prefix, opt_cfg=opt_cfg)
-    return opt
-
-
-def maybe_load_optimizer(optimizer, *, model_prefix, opt_cfg):
-    if model_prefix is None:
-        return
-
-    opt_path = '{}.opt.pt'.format(model_prefix)
-    if not os.path.exists(opt_path):
-        print(f"No optimizer state found at {opt_path}")
-        return
-
-    state_dict = torch.load(opt_path)
-    # Ovverride lr for loaded optimizer
-    if opt_cfg.get('lr', None) is not None:
-        for param_group in state_dict['param_groups']:
-            param_group['lr'] = opt_cfg['lr']
-    try:
-        optimizer.load_state_dict(state_dict)
-    except ValueError as e:
-        print("WARNING: Could not load optimizer state", e)
-
-
-
-def make_scheduler(*, optimizer, sched_type, **sched_config):
-    if sched_type == 'Adal':
-        return getattr(scheduler, sched_type)(optimizer, **sched_config)
-    else:
-        class Mixing(getattr(torch.optim.lr_scheduler, sched_type)):
-            def __init__(self, *, N, lr_m, **kwargs):
-                super().__init__(**kwargs)
-            def step(self, *args, **kwargs):
-                super().step()
-
-        return Mixing(optimizer=optimizer, **sched_config)
-
-    
-# def make_scheduler(*, optimizer, sched_type, **sched_config):
-#     if sched_type=='StepLR':
-#         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = sched_config['step_size'], gamma = sched_config['gamma'])
-#     return scheduler
-
-def load_model(model, *, model_prefix, device, _run=None):
-    assert model_prefix is not None
-    return maybe_load_model(model, model_prefix=model_prefix, device=device, _run=_run)
-
-
-def maybe_load_model(model, *, model_prefix, strict=False):
-    if model_prefix is None:
-        print('model_prefix is None, skipping model load')
-        return
-    # if hvd.rank() == 0:
-    model_path = '{}.pt'.format(model_prefix)
-    print("Loading model %s" % (model_path, ))
-    # if _run is not None:
-        # _run.open_resource(model_path) # log as a resource
-    state_dict = torch.load(model_path, map_location='cpu')
-    model.load_state_dict(state_dict, strict=strict)
-    # model.to(device)
-    print("---> after loading model hash:", util.hash_model_parameters(model).hex())
