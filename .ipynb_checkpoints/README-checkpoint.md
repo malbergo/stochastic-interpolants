@@ -20,7 +20,13 @@ Another demonstration is available to do **mirror interpolation** from a dataset
 An exploratory script based on exact, analytically computed $v(x, t)$ and $s(x, t)$ for the
 case where $\rho_0$ and $\rho_1$ are both Gaussian mixtures can be found in `interflow/gmm.py` and `notebooks/gmm.ipynb`.
 
-ODE and SDE integrators (ODE based on ``torchdiffeq``, SDE hand-written), as well an interpolant class, are provided in `interflow/stochastic_interpolant.py`
+ODE and SDE integrators (ODE based on `torchdiffeq`, SDE hand-written), as well an interpolant class, are provided in `interflow/stochastic_interpolant.py`
+
+With these tools, we are free to do simulation free generation from either deterministic or stochastic dynamics, with variable level of noise:
+
+<img src="imgs_ode_sde_flowers_many_eps_paper.png"  width="600" height="600">
+
+
 
 
 
