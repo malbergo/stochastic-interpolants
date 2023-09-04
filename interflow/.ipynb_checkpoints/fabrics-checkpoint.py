@@ -67,8 +67,8 @@ def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
         bdot = lambda t: -gg_dot(t)/torch.sqrt(1 - gamma(t)**2)*torch.sin(0.5*math.pi*t) \
                                 + 0.5*math.pi*torch.sqrt(1 - gamma(t)**2)*torch.cos(0.5*math.pi*t)
 
-        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
-        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
         
     elif path == 'encoding-decoding':
 
@@ -76,8 +76,8 @@ def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
         adot = lambda t: torch.where(t <= 0.5, -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
         b    = lambda t: torch.where(t > 0.5,  torch.cos(math.pi*t)**2, 0.)
         bdot = lambda t: torch.where(t > 0.5,  -2*math.pi*torch.cos(math.pi*t)*torch.sin(math.pi*t), torch.tensor(0.))
-        It   = lambda t, x0, x1: self.a(t)*x0 + self.b(t)*x1
-        dtIt = lambda t, x0, x1: self.adot(t)*x0 + self.bdot(t)*x1
+        It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
     
     elif path == 'one-sided-linear':
         
