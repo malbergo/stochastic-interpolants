@@ -55,7 +55,7 @@ def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
         b      = lambda t: t
         bdot   = lambda t: 1.0
         It   = lambda t, x0, x1: a(t)*x0 + b(t)*x1
-        dtIt = lambda _, x0, x1: bdot(t) + adot(t)
+        dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
         
     elif path == 'trig':
         if gamma == None:
@@ -80,8 +80,7 @@ def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
         dtIt = lambda t, x0, x1: adot(t)*x0 + bdot(t)*x1
     
     elif path == 'one-sided-linear':
-        
-        #### 06/08/2023: Also trying It = 1-t x0 + t x1
+
         a      = lambda t: (1-t)
         adot   = lambda t: -1.0
         b      = lambda t: t
@@ -92,7 +91,6 @@ def make_It(path='linear', gamma = None, gamma_dot = None, gg_dot = None):
 
     elif path == 'one-sided-trig':
 
-        #### 06/09/2023: Also trying It = cos(pi/2 t) x0 + sin(pi/2 t) x1
         a      = lambda t: torch.cos(0.5*math.pi*t)
         adot   = lambda t: -0.5*math.pi*torch.sin(0.5*math.pi*t)
         b      = lambda t: torch.sin(0.5*math.pi*t)
