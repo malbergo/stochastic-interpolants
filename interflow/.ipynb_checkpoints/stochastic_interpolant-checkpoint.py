@@ -605,7 +605,7 @@ def loss_per_sample_eta(
     xt, z   = interpolant.calc_xt(t, x0, x1)
     xt, t   = xt.unsqueeze(0), t.unsqueeze(0)
     eta_val = eta(xt, t)
-    return 0.5*torch.sum(eta_val**2) + torch.sum(eta_val*z) 
+    return 0.5*torch.sum(eta_val**2) - torch.sum(eta_val*z) 
     
 
 def loss_per_sample_v(
@@ -693,7 +693,7 @@ def loss_per_sample_one_sided_eta(
     xt         = interpolant.calc_xt(t, x0, x1)
     xt, t      = xt.unsqueeze(0), t.unsqueeze(0)
     etat         = eta(xt, t)
-    loss      = 0.5*torch.sum(etat**2) + torch.sum(etat*x0)
+    loss      = 0.5*torch.sum(etat**2) - torch.sum(etat*x0)
     
     return loss
 
